@@ -1,18 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
 # Virtual Environment
 .venv/
+venv/
+env/
 
-# API Keys
+# Environment Variables
 .env
-
-# Python Cache
-__pycache__/
-*.pyc
-
-# Jupyter Checkpoints
-.ipynb_checkpoints/
-
-# VSCode
-.vscode/
 
 # macOS
 .DS_Store
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# Python cache
+.pytest_cache/
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Hugging Face
+.cache/
+huggingface/
+
+# FAISS Index
+faiss_index/
+
+# Chroma (ileride kullanırsan)
+chroma_db/
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# Uploaded PDFs (opsiyonel)
+uploads/
+
+# Generated files
+*.sqlite3
