@@ -1,6 +1,10 @@
 import gradio as gr
 from dotenv import load_dotenv
 
+from pathlib import Path
+
+from time import perf_counter
+
 from app.pdf_loader import load_pdf
 from app.chunking import split_documents
 from app.embedding import create_embedding_model
@@ -9,6 +13,8 @@ from app.retriever import create_retriever
 from app.rag import create_rag_chain
 from app.llm import create_llm
 from app.prompt import create_rag_prompt
+
+from app.evaluation import run_evaluation
 
 load_dotenv(override=True)
 
@@ -31,48 +37,131 @@ def process_pdf(pdf_file):
         prompt=prompt,
     )
 
+    rag_system = {
+        "rag_chain":rag_chain,
+        "vectorstore": vectorstore,
+    }
+
     status = (
         f"PDF processed successfully. "
         f"Pages: {len(documents)}, Chunks: {len(chunks)}"
     )
 
-    return rag_chain, status
+    return rag_system, status
 
 
 
-def ask_question(rag_chain, question):
+def ask_question(rag_system, question):
     """Ask a question using the previously created RAG chain."""
     
-    if rag_chain is None:
-        return "Please upload a file", ""
+    if rag_system is None:
+        return "Please upload a file", "","",""
     
     if not question or not question.strip():
-        return "Please enter a question", ""
+        return "Please enter a question", "","",""
+
+    rag_chain = rag_system["rag_chain"]
+    vectorstore = rag_system["vectorstore"]
+
+    total_start = perf_counter()
+
+    retrieval_start = perf_counter()
+
+    retrieved_results = (
+        vectorstore.similarity_search_with_relevance_scores(
+            query = question,
+            k=3,
+        )
+    )
+
+    retrieval_time = perf_counter() - retrieval_start
+
+    chain_start = perf_counter()
     
     response = rag_chain.invoke({
         "input":question
     })
 
+    chain_time = perf_counter() - chain_start
+    total_time = perf_counter() - total_start
+  
     answer = response["answer"]
 
-    source_lines=[]
 
-    for i, doc in enumerate(response["context"],start=1):
-        source= doc.metadata.get("source","Unknown")
+    source_lines=[]
+    seen_sources = set()
+    debug_sections=[]
+    scores = []
+
+
+    for i, (doc, score) in enumerate(retrieved_results, start=1):
+        source_path = doc.metadata.get("source", "Unknown")
+        source = Path(source_path).name
 
         page = doc.metadata.get(
             "page_label",
-            doc.metadata.get("page","Unknown")
+            doc.metadata.get("page", "Unknown"),
+        )
+        scores.append(score)
+
+        source_key = (source,page)
+
+        if source_key not in seen_sources:
+            source_lines.append(
+                f"{source} - Page {page}"
+            )
+            seen_sources.add(source_key)
+
+        debug_sections.append(
+            f"""### Chunk {i}
+
+**Source:** {source}
+
+**Page:** {page}
+
+**Relevance score:** {score:.4f}
+
+**Content:**
+
+{doc.page_content}
+"""
         )
 
-        source_lines.append(
-            f"{i}. {source} - Page{page}"
-        )
 
     sources = "\n".join(source_lines)
+    retrieval_debug = "\n\n---\n\n".join(debug_sections)
 
-    return answer, sources
-    
+    if scores:
+        best_score = max(scores)
+        worst_score = min(scores)
+        average_score = sum(scores) / len(scores)
+    else:
+        best_score = 0.0
+        worst_score = 0.0
+        average_score = 0.0
+
+    statistics = f"""### Retrieval Statistics
+
+**Top-k:** 3
+
+**Retrieved chunks:** {len(retrieved_results)}
+
+**Best score:** {best_score:.4f}
+
+**Average score:** {average_score:.4f}
+
+**Worst score:** {worst_score:.4f}
+
+### Timing
+
+**Scored retrieval:** {retrieval_time:.4f} seconds
+
+**RAG chain:** {chain_time:.4f} seconds
+
+**Total:** {total_time:.4f} seconds
+"""
+
+    return answer, sources, retrieval_debug, statistics
 
 with gr.Blocks(title="PDF RAG CHATBOT") as demo:
 
@@ -99,6 +188,16 @@ Upload a PDF, process it, and ask questions based only on its content.
                 "Process PDF",
                 variant="primary",
             )
+
+            evaluation_button = gr.Button(
+                "Run Evaluation",
+                )
+            
+            evaluation_output = gr.Textbox(
+                label="Evaluation Results",
+                lines=4,
+                interactive=False,
+                )
 
             status_output = gr.Textbox(
                 label="Status",
@@ -130,6 +229,15 @@ Upload a PDF, process it, and ask questions based only on its content.
                 interactive=False,
             )
 
+            retrieval_debug_output = gr.Markdown(
+                value="Retrieved chunks will appear here.",
+                label="Retrieval Debug",
+            )
+
+            statistics_output = gr.Markdown(
+                value="Retrieval statistics will appear here.",
+            )
+
     process_button.click(
         fn=process_pdf,
         inputs=pdf_input,
@@ -138,6 +246,8 @@ Upload a PDF, process it, and ask questions based only on its content.
             status_output,
         ],
     )
+
+   
 
     ask_button.click(
         fn=ask_question,
@@ -148,7 +258,15 @@ Upload a PDF, process it, and ask questions based only on its content.
         outputs=[
             answer_output,
             sources_output,
+            retrieval_debug_output,
+            statistics_output,
         ],
+    )
+
+    evaluation_button.click(
+    fn=run_evaluation,
+    inputs=rag_state,
+    outputs=evaluation_output,
     )
 
     question_input.submit(
@@ -160,6 +278,8 @@ Upload a PDF, process it, and ask questions based only on its content.
         outputs=[
             answer_output,
             sources_output,
+            retrieval_debug_output,
+            statistics_output,
         ],
     )
 
